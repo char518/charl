@@ -1,0 +1,4 @@
+/* 英文界面下的系统权限用途说明；键名与 Info.plist 中的键一致。 */
+NSCalendarsUsageDescription = "charl reads your calendars so events can appear in the perpetual calendar.";
+NSCalendarsFullAccessUsageDescription = "charl reads your calendars so events can appear in the perpetual calendar.";
+NSScreenCaptureUsageDescription = "charl captures the screen so you can freeze it, select a region and take a screenshot.";

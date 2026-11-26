@@ -1,0 +1,4 @@
+/* 中文界面下的系统权限用途说明；键名与 Info.plist 中的键一致。 */
+NSCalendarsUsageDescription = "charl 需要访问日历，以便在万年历中显示你的日程。";
+NSCalendarsFullAccessUsageDescription = "charl 需要访问日历，以便在万年历中显示你的日程。";
+NSScreenCaptureUsageDescription = "charl 需要访问屏幕内容，以便定格画面、框选区域并完成截图。";

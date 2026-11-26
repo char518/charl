@@ -1,0 +1,17 @@
+import CharlCore
+Lang.preference = .chinese  // 断言的是中文文案，钉住语言保证 CI 可复现
+testKeyCombo()
+testClipboardHistory()
+testRelativeTime()
+testDayMath()
+testLunarCalendar()
+testSolarTerms()
+testGanZhi()
+testHolidays()
+testCalendarMonth()
+testSearchEngine()
+testAppSettings()
+testClipboardGroups()
+testRemote()
+testLocalization()
+finishTests()

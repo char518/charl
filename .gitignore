@@ -1,0 +1,23 @@
+# Swift / SPM
+.build/
+.swiftpm/
+*.xcresult
+xcuserdata/
+DerivedData/
+
+# Build output & packaging
+dist/
+*.dmg
+
+# macOS / editor cruft
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Internal-only design & spec artifacts (not part of the public source)
+vibe_images/
+功能说明.md
+
+# Re-include this file even if a global gitignore ignores .gitignore
+!.gitignore
