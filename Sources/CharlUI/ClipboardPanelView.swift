@@ -162,6 +162,17 @@ struct ClipboardActions {
     var close: () -> Void
 }
 
+/// 卡片悬停只由光标位置推导（鼠标移动 / 布局落定 / 滚动时重算）。
+/// 不监听 .onHover：reloadData 回收视图时 AppKit 会补发 mouseExited，
+/// 会把静止光标下的悬停错误清掉，按钮随之消失、点击落空。
+final class ClipboardCardHover: ObservableObject {
+    @Published private(set) var id: UUID?
+
+    func reset(to id: UUID?) {
+        if self.id != id { self.id = id }
+    }
+}
+
 private struct ClipboardCardScroller: NSViewRepresentable {
     let model: ClipboardModuleModel
     let actions: ClipboardActions
@@ -175,7 +186,7 @@ private struct ClipboardCardScroller: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ClipboardHorizontalScrollView {
         let scrollView = ClipboardHorizontalScrollView()
-        let collectionView = NSCollectionView()
+        let collectionView = ClipboardCollectionView()
         let layout = NSCollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
         layout.itemSize = NSSize(width: compact ? 190 : 250, height: (compact ? 170 : 200) + ClipboardCardMetrics.attachmentHeight)
@@ -188,6 +199,9 @@ private struct ClipboardCardScroller: NSViewRepresentable {
         collectionView.isSelectable = false
         collectionView.dataSource = context.coordinator
         collectionView.delegate = context.coordinator
+        collectionView.onLayout = { [weak coordinator = context.coordinator] in coordinator?.refreshHoverUnderPointer() }
+        collectionView.onPointerMove = { [weak coordinator = context.coordinator] in coordinator?.refreshHoverUnderPointer() }
+        collectionView.onPointerExit = { [weak coordinator = context.coordinator] in coordinator?.hover.reset(to: nil) }
         collectionView.register(ClipboardCardCollectionItem.self, forItemWithIdentifier: ClipboardCardCollectionItem.identifier)
 
         scrollView.documentView = collectionView
@@ -225,6 +239,7 @@ private struct ClipboardCardScroller: NSViewRepresentable {
         let items = model.visibleItems
         let identifiers = items.map(\.id)
         let contentChanged = identifiers != coordinator.identifiers
+        let oldIdentifiers = coordinator.identifiers
         let oldSelection = coordinator.selection
         let selectionChanged = oldSelection != model.selection
         coordinator.items = items
@@ -236,8 +251,26 @@ private struct ClipboardCardScroller: NSViewRepresentable {
 
         guard let collectionView = coordinator.collectionView else { return }
         let previousOffset = scrollView.contentView.bounds.origin
-        if contentChanged || sizeChanged {
+        if sizeChanged || oldIdentifiers.isEmpty || identifiers.isEmpty {
             collectionView.reloadData()
+        } else if contentChanged {
+            // 差量更新：已有 hosting 只移动不重建。reloadData 重建后 SwiftUI 内容
+            // 可能来不及/不再重绘，静止光标下的点击会落在没画出来的卡片上。
+            let oldIndex = Dictionary(uniqueKeysWithValues: oldIdentifiers.enumerated().map { ($0.element, $0.offset) })
+            let newIndex = Dictionary(uniqueKeysWithValues: identifiers.enumerated().map { ($0.element, $0.offset) })
+            let deletes = oldIdentifiers.enumerated().filter { newIndex[$0.element] == nil }.map { IndexPath(item: $0.offset, section: 0) }
+            let inserts = identifiers.enumerated().filter { oldIndex[$0.element] == nil }.map { IndexPath(item: $0.offset, section: 0) }
+            let moves = oldIdentifiers.enumerated().compactMap { entry -> (from: IndexPath, to: IndexPath)? in
+                guard let to = newIndex[entry.element], to != entry.offset else { return nil }
+                return (IndexPath(item: entry.offset, section: 0), IndexPath(item: to, section: 0))
+            }
+            collectionView.performBatchUpdates {
+                if !deletes.isEmpty { collectionView.deleteItems(at: Set(deletes)) }
+                if !inserts.isEmpty { collectionView.insertItems(at: Set(inserts)) }
+                for move in moves { collectionView.moveItem(at: move.from, to: move.to) }
+            } completionHandler: { [weak coordinator] _ in
+                coordinator?.refreshHoverUnderPointer()
+            }
         } else if selectionChanged {
             var changed: [IndexPath] = []
             if items.indices.contains(oldSelection) { changed.append(IndexPath(item: oldSelection, section: 0)) }
@@ -285,6 +318,10 @@ private struct ClipboardCardScroller: NSViewRepresentable {
             }
         }
         if scrollView.window == nil { coordinator.stopMotion() }
+        if contentChanged || sizeChanged || selectionChanged {
+            // 等这一轮布局与滚动落定，再按光标位置重算悬停
+            DispatchQueue.main.async { [weak coordinator] in coordinator?.refreshHoverUnderPointer() }
+        }
     }
 
     final class Coordinator: NSObject, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
@@ -299,6 +336,7 @@ private struct ClipboardCardScroller: NSViewRepresentable {
         var ropeYs: [CGFloat] = []
         var attachments: [(x: CGFloat, y: CGFloat)] = []
         var contentWidth: CGFloat = 0
+        let hover = ClipboardCardHover()
         weak var collectionView: NSCollectionView?
 
         init(model: ClipboardModuleModel, actions: ClipboardActions, compact: Bool, ropeOpacity: Double = 1, resignSearch: @escaping () -> Void) {
@@ -339,6 +377,20 @@ private struct ClipboardCardScroller: NSViewRepresentable {
         }
 
         func attachmentPoints() -> [(x: CGFloat, y: CGFloat)] { attachments }
+
+        /// 按当前光标位置重算悬停卡片：内容或滚动变化后，光标下的卡片可能已经换了一张。
+        func refreshHoverUnderPointer() {
+            guard let cv = collectionView, let window = cv.window else { hover.reset(to: nil); return }
+            let point = cv.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            guard cv.visibleRect.contains(point),
+                  let indexPath = cv.indexPathForItem(at: point),
+                  items.indices.contains(indexPath.item),
+                  let frame = cv.layoutAttributesForItem(at: indexPath)?.frame else { hover.reset(to: nil); return }
+            let item = items[indexPath.item]
+            let cardHeight = ClipboardCardMetrics.height(for: item, compact: compact)
+            let card = ClipboardCardMetrics.cardFrame(in: frame, height: cardHeight, flipped: cv.isFlipped)
+            hover.reset(to: card.contains(point) ? item.id : nil)
+        }
 
         // 挂绳“微风”动效：单个 30fps 定时器驱动绳身呼吸 + 卡片绕挂点轻摆。
         // 只改 layer transform 与绳身重绘，不触发 SwiftUI 重渲染/UICollectionView reload。
@@ -393,6 +445,7 @@ private struct ClipboardCardScroller: NSViewRepresentable {
                 let dx = x - self.lastOriginX
                 self.lastOriginX = x
                 if abs(dx) > 0.5 { self.addScrollImpulse(dx * 0.6) }
+                self.refreshHoverUnderPointer()
             }
         }
 
@@ -487,6 +540,7 @@ private struct ClipboardCardScroller: NSViewRepresentable {
                 ropeOpacity: ropeOpacity,
                 index: index,
                 isSelected: selection == index,
+                hover: hover,
                 onSelect: { [weak self] in
                     self?.model.selection = index
                     self?.resignSearch()
@@ -516,14 +570,18 @@ private enum ClipboardKindStyle {
     }
 }
 
-private enum ClipboardCardMetrics {
+enum ClipboardCardMetrics {
     static let spacing: CGFloat = 14
     static let attachmentHeight: CGFloat = 14
 
+    /// 卡片本体位于 item  frame 中挂绳的下方，按视图是否翻转取对应一端。
+    static func cardFrame(in itemFrame: NSRect, height: CGFloat, flipped: Bool) -> NSRect {
+        NSRect(x: itemFrame.minX, y: flipped ? itemFrame.maxY - height : itemFrame.minY, width: itemFrame.width, height: height)
+    }
+
+    // 统一宽度：删除一张后，下一张的按钮要落在光标原来的位置，宽度随类型变化会对不齐
     static func width(for item: ClipboardItem, compact: Bool) -> CGFloat {
-        if item.isLink { return compact ? 180 : 220 }
-        if item.kind == .image { return compact ? 170 : 210 }
-        return compact ? 190 : 250
+        compact ? 190 : 250
     }
 
     static func height(for item: ClipboardItem, compact: Bool) -> CGFloat {
@@ -657,6 +715,38 @@ private final class ClipboardScroller: NSScroller {
     }
 }
 
+/// 布局落定后重算光标下的悬停卡片：reloadData 的布局不是同步完成的，
+/// 只靠一次异步重算会扑空，悬停被清掉后按钮就再也不出现。
+private final class ClipboardCollectionView: NSCollectionView {
+    var onLayout: (() -> Void)?
+    var onPointerMove: (() -> Void)?
+    var onPointerExit: (() -> Void)?
+    private var pointerTracking: NSTrackingArea?
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+
+    override func updateTrackingAreas() {
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        pointerTracking = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        onPointerMove?()
+        super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onPointerExit?()
+        super.mouseExited(with: event)
+    }
+}
+
 private final class ClipboardHorizontalScrollView: NSScrollView {
     var requiredContentWidth: CGFloat = 0
     var onWindowChange: ((Bool) -> Void)?
@@ -722,6 +812,7 @@ private final class ClipboardCardCollectionItem: NSCollectionViewItem {
         ropeOpacity: Double,
         index: Int,
         isSelected: Bool,
+        hover: ClipboardCardHover,
         onSelect: @escaping () -> Void,
         onActivate: @escaping () -> Void,
         onPreview: @escaping () -> Void,
@@ -736,6 +827,7 @@ private final class ClipboardCardCollectionItem: NSCollectionViewItem {
             compact: compact,
             index: index,
             isSelected: isSelected,
+            hover: hover,
             onSelect: onSelect,
             onActivate: onActivate,
             onPreview: onPreview,
@@ -794,6 +886,7 @@ struct ClipboardCard: View {
     let compact: Bool
     let index: Int
     let isSelected: Bool
+    @ObservedObject var hover: ClipboardCardHover
     let onSelect: () -> Void
     let onActivate: () -> Void
     let onPreview: () -> Void
@@ -802,7 +895,7 @@ struct ClipboardCard: View {
     let onTogglePin: () -> Void
     let onDelete: () -> Void
 
-    @State private var hovering = false
+    private var hovering: Bool { hover.id == item.id }
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -830,7 +923,6 @@ struct ClipboardCard: View {
         .animation(Theme.motion(.spring(response: 0.28, dampingFraction: 0.6)), value: hovering)
         .animation(Theme.motion(.spring(response: 0.22, dampingFraction: 0.8)), value: isSelected)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
         .onTapGesture(count: 2, perform: onActivate)
         .onTapGesture(count: 1, perform: onSelect)
         .contextMenu {
@@ -943,26 +1035,30 @@ struct ClipboardCard: View {
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(Theme.secondary)
                 .frame(width: 16, alignment: .leading)
-            Spacer(minLength: 2)
-            if hovering || isSelected {
+            Text(footerMeta)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            // 操作按钮常驻：若只在悬停时插入视图树，静止光标下的点击会落在按钮出现/消失的间隙里
+            HStack(spacing: 4) {
                 ToolButton(symbol: "eye", help: loc("预览 (Space)", "Preview (Space)"), size: 23, action: onPreview)
                 ToolButton(symbol: "doc.on.doc", help: loc("仅复制", "Copy Only"), size: 23, action: onCopy)
                 ToolButton(symbol: "trash", help: loc("删除", "Delete"), size: 23, action: onDelete)
-            } else if item.kind == .image {
-                Text("\(item.imageWidth ?? 0) × \(item.imageHeight ?? 0)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.tertiary)
-            } else {
-                Text(loc("\(item.characterCount) 字符", item.characterCount == 1 ? "1 char" : "\(item.characterCount) chars"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.tertiary)
             }
+            .opacity(hovering || isSelected ? 1 : 0.45)
             ToolButton(symbol: item.isPinned ? "star.fill" : "star", help: item.isPinned ? loc("取消收藏", "Unpin") : loc("收藏", "Pin"), tint: item.isPinned ? Theme.workday : Theme.tertiary, size: 23, action: onTogglePin)
                 .opacity(hovering || item.isPinned || isSelected ? 1 : 0.45)
         }
         .padding(.horizontal, 12)
         .frame(height: compact ? 42 : 48)
         .animation(Theme.motion(.easeOut(duration: 0.1)), value: hovering)
+    }
+
+    private var footerMeta: String {
+        if item.kind == .image { return "\(item.imageWidth ?? 0) × \(item.imageHeight ?? 0)" }
+        return loc("\(item.characterCount) 字符", item.characterCount == 1 ? "1 char" : "\(item.characterCount) chars")
     }
 }
 

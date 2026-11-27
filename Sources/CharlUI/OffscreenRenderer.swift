@@ -20,8 +20,11 @@ public enum OffscreenRenderer {
         case "capture":
             let frame = testFrame()
             let state = CaptureState()
-            let canvas = ScreenshotCanvas(frame: frame, state: state, windows: [], magnifier: false)
+            // query=pending：输出「已有选区时单击选区外窗口」的中间态（原选区保留，待切换窗口只高亮）
+            let windows = query == "pending" ? [DetectedWindow(frame: Rect(x: 60, y: 40, width: 600, height: 380), title: "", owner: "")] : []
+            let canvas = ScreenshotCanvas(frame: frame, state: state, windows: windows, magnifier: false)
             canvas.setSelection(CGRect(x: 100, y: 80, width: 320, height: 220))
+            if query == "pending" { canvas.simulateClick(at: CGPoint(x: 600, y: 340)) }
             let container = NSView(frame: canvas.bounds)
             container.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             container.addSubview(canvas)

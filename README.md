@@ -13,7 +13,7 @@ No accounts, no telemetry, no Electron — just Swift, SwiftUI and AppKit.
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000.svg?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138.svg?logo=swift&logoColor=white)](https://swift.org)
 [![Universal](https://img.shields.io/badge/binary-Apple%20Silicon%20%2B%20Intel-success.svg)](#build-from-source)
-[![Tests](https://img.shields.io/badge/tests-1507%20core%20%2B%2052%20integration-brightgreen.svg)](#build--test)
+[![Tests](https://img.shields.io/badge/tests-1507%20core%20%2B%2072%20integration-brightgreen.svg)](#build--test)
 
 English · [简体中文](README.zh-CN.md)
 
@@ -95,7 +95,7 @@ Full details and vulnerability reporting: [SECURITY.md](SECURITY.md).
 ```bash
 swift build                      # debug build
 swift run CharlCoreTests         # 1507 core assertions (lunar, solar terms, holidays, settings, …)
-swift run CharlIntegrationTests  # 52 integration checks (hotkeys, clipboard, capture, scaling, …)
+swift run CharlIntegrationTests  # 72 integration checks (hotkeys, clipboard, capture, scaling, …)
 bash Scripts/build-app.sh        # debug .app
 bash Scripts/build-app.sh --universal   # release universal .app
 bash Scripts/notarize.sh         # universal .app + DMG (optional Developer ID + notarization)

@@ -2,6 +2,7 @@
 set -euo pipefail
 ROOT="$(dirname "$0")/.."
 cd "$ROOT"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
 
 # 1) 构建 Universal app（x86_64 + arm64）
 bash Scripts/build-app.sh --universal
@@ -27,15 +28,15 @@ mkdir -p /tmp/charl-dmg-mount
 hdiutil attach dist/charl-rw.dmg -nobrowse -mountpoint /tmp/charl-dmg-mount -quiet
 SetFile -a C /tmp/charl-dmg-mount
 hdiutil detach /tmp/charl-dmg-mount -quiet
-hdiutil convert dist/charl-rw.dmg -format UDZO -imagekey zlib-level=9 -o dist/charl-0.3.0.dmg -quiet -ov
+hdiutil convert dist/charl-rw.dmg -format UDZO -imagekey zlib-level=9 -o dist/charl-$VERSION.dmg -quiet -ov
 rm -f dist/charl-rw.dmg
 rm -rf dist/dmg-stage
 
 # 4) 若提供公证 profile，则提交公证并装订；否则仅本地自签包
 if [ -n "${CHARL_NOTARY_PROFILE:-}" ]; then
-  xcrun notarytool submit dist/charl-0.3.0.dmg --keychain-profile "$CHARL_NOTARY_PROFILE" --wait
-  xcrun stapler staple dist/charl-0.3.0.dmg
+  xcrun notarytool submit dist/charl-$VERSION.dmg --keychain-profile "$CHARL_NOTARY_PROFILE" --wait
+  xcrun stapler staple dist/charl-$VERSION.dmg
 else
   echo "DMG ready (self-signed, not notarized). Set CHARL_NOTARY_PROFILE to notarize."
 fi
-echo "Done: dist/charl-0.3.0.dmg"
+echo "Done: dist/charl-$VERSION.dmg"

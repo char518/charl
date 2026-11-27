@@ -2,6 +2,8 @@ import AppKit
 import CharlCore
 import SwiftUI
 
+private let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.1"
+
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general, hotkeys, clipboard, capture, calendar
     var id: String { rawValue }
@@ -113,7 +115,7 @@ public struct SettingsView: View {
             }
 
             Spacer()
-            Text(loc("版本 0.3.0", "Version 0.3.0"))
+            Text(loc("版本 \(appVersion)", "Version \(appVersion)"))
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.tertiary)
                 .padding(.horizontal, 9)
@@ -322,7 +324,7 @@ public struct SettingsView: View {
                 }
             }
 
-            InlineNotice(symbol: "cursorarrow.rays", text: loc("从鼠标位置拖拽框选，双击选择窗口，再调整或标注。松开鼠标保留选区，回车复制，Esc 取消。", "Drag from the pointer to select, double-click for a window, then adjust or annotate. Release keeps the selection, Return copies, Esc cancels."))
+            InlineNotice(symbol: "cursorarrow.rays", text: loc("从鼠标位置拖拽框选，或单击选择窗口，再调整或标注。松开鼠标保留选区，双击或回车复制，Esc 取消。", "Drag from the pointer to select, or click a window, then adjust or annotate. Release keeps the selection; double-click or press Return to copy, Esc cancels."))
 
             SettingsCard(loc("贴图手势", "Pin Gestures")) {
                 SettingsRow(title: loc("移动与缩放", "Move & Zoom"), detail: loc("拖动移动位置，滚轮缩放图片", "Drag to move, scroll to zoom")) {

@@ -13,7 +13,7 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000.svg?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138.svg?logo=swift&logoColor=white)](https://swift.org)
 [![Universal](https://img.shields.io/badge/binary-Apple%20Silicon%20%2B%20Intel-success.svg)](#从源码构建)
-[![Tests](https://img.shields.io/badge/tests-1507%20core%20%2B%2052%20integration-brightgreen.svg)](#构建与测试)
+[![Tests](https://img.shields.io/badge/tests-1507%20core%20%2B%2072%20integration-brightgreen.svg)](#构建与测试)
 
 [English](README.md) · 简体中文
 
@@ -86,7 +86,7 @@ open dist/charl.app
 ```bash
 swift build                      # debug 构建
 swift run CharlCoreTests         # 1507 项核心断言（农历、节气、节假日、设置…）
-swift run CharlIntegrationTests  # 52 项集成检查（快捷键、剪贴板、截图、缩放…）
+swift run CharlIntegrationTests  # 72 项集成检查（快捷键、剪贴板、截图、缩放…）
 bash Scripts/build-app.sh        # debug .app
 bash Scripts/build-app.sh --universal   # release 通用 .app
 bash Scripts/notarize.sh         # 通用 .app + DMG（可选 Developer ID + 公证）

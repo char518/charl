@@ -3,6 +3,27 @@
 All notable changes to charl are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.3.1]
+
+### Changed
+- Screenshot: a single click now picks the window under the pointer (previously double-click);
+  clicking empty space clears the selection. With a region selected, double-clicking anywhere —
+  inside or outside — copies and finishes it, keeping the region and its annotations.
+- Screenshot: clicking another window while a selection exists highlights it first and switches
+  after the double-click interval, so a double-click copy never flickers.
+- Clipboard: card actions (preview / copy / delete / pin) are always visible, dimmed until hovered;
+  character count / image size sit next to them. Cards use a uniform width per density so repeated
+  deletes at a stationary pointer stay aligned.
+
+### Fixed
+- Clipboard: deleting a card no longer breaks clicking the next card under a stationary pointer.
+  List changes use differential batch updates instead of rebuilding every card (rebuilt SwiftUI hosts
+  could stay unrendered and swallow clicks); hover is derived from the pointer position on move,
+  layout and scroll.
+- Screenshot: double-clicking inside the selection no longer replaces it with the window under the
+  pointer.
+- Screenshot: the annotation toolbar hides when the selection is cleared.
+
 ## [0.3.0]
 
 ### Added

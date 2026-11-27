@@ -68,7 +68,7 @@ final class ScreenshotCanvas: NSView {
     private let state: CaptureState
     private let windows: [DetectedWindow]
     private let magnifier: Bool
-    var onSelection: ((CGRect) -> Void)?
+    var onSelection: ((CGRect?) -> Void)?
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
     var onColorCopy: ((String) -> Void)?
@@ -86,6 +86,19 @@ final class ScreenshotCanvas: NSView {
     private var originalSelection: CGRect?
     private var dragMode: DragMode?
     private enum DragMode { case newSelection, move, resize(Int), annotate }
+    // 双击 = 两次都没拖拽的单击；拖出选区后紧接着的一次点击不算双击。
+    private var lastClickDragged = false
+    private struct Capture { var selection: CGRect; var annotations: [Annotation] }
+    // 选区外的单击会换掉当前选区；若紧接双击，则回到换掉前的选区并复制（有选区时双击处处可复制）。
+    private var pressedCapture: Capture?
+    private var replacedCapture: Capture?
+    // 已有选区时单击选区外的窗口：先只高亮该窗口、原选区不动，过了双击间隔才真正切换；
+    // 紧接着的双击要复制原选区，这样它从头到尾不会消失。
+    private var pendingSwitch: DispatchWorkItem?
+    private var pendingOrigin = CGPoint.zero
+    private var isSwitchPending: Bool { pendingSwitch != nil }
+
+    deinit { pendingSwitch?.cancel() }
 
     init(frame: ScreenFrame, state: CaptureState, windows: [DetectedWindow], magnifier: Bool) {
         screenFrame = frame
@@ -162,6 +175,8 @@ final class ScreenshotCanvas: NSView {
     override func mouseMoved(with event: NSEvent) {
         let oldHover = hovered
         pointer = convert(event.locationInWindow, from: nil)
+        // 双击之间难免有轻微抖动，移开明显了才算离开，这时再完成待定切换
+        if isSwitchPending, hypot(pointer.x - pendingOrigin.x, pointer.y - pendingOrigin.y) > 6 { commitPendingSwitch() }
         updateHover()
         updateCursor(at: pointer)
         if hovered != oldHover {
@@ -186,10 +201,16 @@ final class ScreenshotCanvas: NSView {
     }
 
     private func updateHover() {
-        guard selection == nil else { hovered = nil; return }
-        hovered = windows.first { window in
-            CGRect(x: window.frame.x, y: window.frame.y, width: window.frame.width, height: window.frame.height).contains(pointer)
-        }.map { CGRect(x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height) }
+        guard selection == nil else {
+            if !isSwitchPending { hovered = nil }
+            return
+        }
+        hovered = windowFrame(at: pointer)
+    }
+
+    private func windowFrame(at point: CGPoint) -> CGRect? {
+        windows.first { CGRect(x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height).contains(point) }
+            .map { CGRect(x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -199,6 +220,17 @@ final class ScreenshotCanvas: NSView {
         if let region { shade.appendRect(region); shade.windingRule = .evenOdd }
         NSColor.black.withAlphaComponent(0.35).setFill()
         shade.fill()
+        if isSwitchPending, selection != nil, let hovered {
+            // 待切换的窗口先取消压暗并描边，原选区（含标注与手柄）随后照常画在上面
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: hovered).addClip()
+            displayImage.draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+            NSGraphicsContext.restoreGraphicsState()
+            Theme.accentNS.setStroke()
+            let outline = NSBezierPath(rect: hovered)
+            outline.lineWidth = 1.5
+            outline.stroke()
+        }
         if let region {
             NSGraphicsContext.saveGraphicsState()
             let clipping = NSBezierPath(rect: region)
@@ -224,7 +256,7 @@ final class ScreenshotCanvas: NSView {
         }
         if magnifier && selection == nil { drawMagnifier() }
         if selection == nil {
-            label(loc("拖拽框选 / 双击选窗口 · C 色值 · Esc 取消", "Drag to select · double-click a window · C color · Esc cancel"), at: CGPoint(x: max(8, bounds.midX - 205), y: max(8, bounds.height - 45)))
+            label(loc("拖拽框选 / 单击选窗口 · C 色值 · Esc 取消", "Drag to select · click a window · C color · Esc cancel"), at: CGPoint(x: max(8, bounds.midX - 205), y: max(8, bounds.height - 45)))
         }
     }
 
@@ -268,16 +300,11 @@ final class ScreenshotCanvas: NSView {
         window?.makeFirstResponder(self)
         lastMagnifierRect = nil
         let point = clamp(convert(event.locationInWindow, from: nil))
-        if event.clickCount == 2, state.tool == .select {
-            let target = windows.first { window in
-                CGRect(x: window.frame.x, y: window.frame.y, width: window.frame.width, height: window.frame.height).contains(point)
-            }.map { CGRect(x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height) }
-            if let target {
-                selection = target
-                onSelection?(target)
-                needsDisplay = true
-                return
-            }
+        // 双击的第二下：只在逻辑上完成待定切换，不重绘，原选区一直显示到复制结束
+        var redraw = true
+        if isSwitchPending {
+            redraw = event.clickCount != 2
+            commitPendingSwitch(redraw: redraw)
         }
         pointer = point
         origin = point
@@ -291,15 +318,12 @@ final class ScreenshotCanvas: NSView {
         } else if let selection, selection.contains(point) {
             dragMode = .move
         } else {
-            hovered = windows.first { window in
-                CGRect(x: window.frame.x, y: window.frame.y, width: window.frame.width, height: window.frame.height).contains(point)
-            }.map { CGRect(x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height) }
-            selection = nil
-            annotations.removeAll()
-            state.undoCount = 0
+            // 按下时不急着清掉原选区：是拖拽还是单击，要到松开才知道
+            hovered = windowFrame(at: point)
+            pressedCapture = selection.map { Capture(selection: $0, annotations: annotations) }
             dragMode = .newSelection
         }
-        needsDisplay = true
+        if redraw { needsDisplay = true }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -308,7 +332,12 @@ final class ScreenshotCanvas: NSView {
         let point = clamp(convert(event.locationInWindow, from: nil))
         pointer = point
         switch dragMode {
-        case .newSelection: selection = normalized(origin, point)
+        case .newSelection:
+            // 几像素内的抖动不算拖拽，原选区保持可见
+            guard hypot(point.x - origin.x, point.y - origin.y) >= 5 else { return }
+            annotations.removeAll()
+            state.undoCount = 0
+            selection = normalized(origin, point)
         case .move:
             guard let originalSelection else { return }
             var rect = originalSelection.offsetBy(dx: point.x - origin.x, dy: point.y - origin.y)
@@ -334,8 +363,16 @@ final class ScreenshotCanvas: NSView {
 
     override func mouseUp(with event: NSEvent) {
         lastMagnifierRect = nil
+        // 没拖拽的单击落在选区外：原有选区且指向窗口时先高亮、延后切换；否则直接选中该窗口或取消选区（同 Snipaste / PixPin）。
         if case .newSelection = dragMode, let origin, hypot(pointer.x - origin.x, pointer.y - origin.y) < 5 {
-            selection = nil
+            if state.tool == .select, pressedCapture != nil, let target = windowFrame(at: pointer) {
+                hovered = target
+                scheduleSwitch(at: pointer)
+            } else {
+                selection = hovered
+                annotations.removeAll()
+                state.undoCount = 0
+            }
         }
         if let draft { annotations.append(draft); self.draft = nil; state.undoCount = annotations.count }
         if case .move = dragMode, let originalSelection, let selection {
@@ -343,13 +380,69 @@ final class ScreenshotCanvas: NSView {
             let dy = selection.minY - originalSelection.minY
             for index in annotations.indices { annotations[index].points = annotations[index].points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) } }
         }
-        if let selection, selection.width >= 4, selection.height >= 4 { onSelection?(selection) }
-        else { selection = nil }
+        var dragged = false
+        switch dragMode {
+        case .newSelection: dragged = origin.map { hypot(pointer.x - $0.x, pointer.y - $0.y) >= 5 } ?? false
+        case .move, .resize: dragged = selection != originalSelection
+        case .annotate: dragged = true
+        case nil: break
+        }
+        var adjusting = false, starting = false
+        if case .move = dragMode { adjusting = true } else if case .resize = dragMode { adjusting = true }
+        if case .newSelection = dragMode { starting = true }
+        let doubleClick = event.clickCount == 2 && !lastClickDragged && !dragged && state.tool == .select
+        let inside = selection.map { $0.insetBy(dx: -6, dy: -6).contains(pointer) } ?? false
+        let confirming = doubleClick && (replacedCapture != nil || (adjusting && inside))
+        if confirming, let previous = replacedCapture {
+            selection = previous.selection
+            annotations = previous.annotations
+            state.undoCount = annotations.count
+        } else if !confirming {
+            if let selection, selection.width >= 4, selection.height >= 4 { onSelection?(selection) }
+            else { selection = nil; onSelection?(nil) }
+        }
+        lastClickDragged = dragged
+        replacedCapture = starting && !dragged ? pressedCapture : nil
+        pressedCapture = nil
         dragMode = nil; origin = nil
         needsDisplay = true
+        if confirming { onConfirm?() }
+    }
+
+    /// 单击选区外的窗口后延后切换：等过双击间隔还没第二下，才把选区换过去。
+    private func scheduleSwitch(at point: CGPoint) {
+        pendingSwitch?.cancel()
+        pendingOrigin = point
+        let work = DispatchWorkItem { [weak self] in self?.commitPendingSwitch() }
+        pendingSwitch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: work)
+    }
+
+    /// redraw 为 false 时只改状态不重绘，用于双击的第二下按下。
+    private func commitPendingSwitch(redraw: Bool = true) {
+        guard let work = pendingSwitch else { return }
+        work.cancel()
+        pendingSwitch = nil
+        selection = hovered
+        annotations.removeAll()
+        state.undoCount = 0
+        if redraw {
+            if let selection { onSelection?(selection) }
+            needsDisplay = true
+        }
+    }
+
+    /// 供离屏渲染输出「单击选区外窗口」的中间态。
+    func simulateClick(at point: CGPoint) {
+        let location = convert(point, to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { continue }
+            if type == .leftMouseDown { mouseDown(with: event) } else { mouseUp(with: event) }
+        }
     }
 
     override func keyDown(with event: NSEvent) {
+        commitPendingSwitch()
         if event.keyCode == 53 { onCancel?() }
         else if event.keyCode == 36 { onConfirm?() }
         else if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "z" { undo() }
@@ -369,6 +462,7 @@ final class ScreenshotCanvas: NSView {
 
     func result() -> NSImage? {
         commitText()
+        commitPendingSwitch()
         guard let selection else { return nil }
         let scale = screenFrame.scale
         let pixels = CGRect(x: selection.minX * scale, y: selection.minY * scale, width: selection.width * scale, height: selection.height * scale).integral

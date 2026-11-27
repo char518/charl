@@ -104,6 +104,7 @@ public final class ScreenshotController {
         view.addSubview(toolbar)
         view.onSelection = { [weak toolbar, weak view] rect in
             guard let toolbar, let view else { return }
+            guard let rect else { toolbar.isHidden = true; return }
             let x = min(max(8, rect.maxX - toolbar.frame.width), max(8, view.bounds.width - toolbar.frame.width - 8))
             let y = rect.maxY + toolbar.frame.height + 10 < view.bounds.height ? rect.maxY + 8 : max(8, rect.minY - toolbar.frame.height - 8)
             toolbar.setFrameOrigin(CGPoint(x: x, y: y))
@@ -259,7 +260,7 @@ private struct CaptureToolbarContent: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(loc("复制 (↩)", "Copy (↩)"))
+            .help(loc("复制 (↩ / 双击选区)", "Copy (↩ / double-click)"))
             .accessibilityLabel(loc("确认并复制截图", "Confirm and copy screenshot"))
         }
         .padding(.horizontal, 6)
